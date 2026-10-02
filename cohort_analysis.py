@@ -75,7 +75,17 @@ fig, ax = plt.subplots(figsize=(8, 4.5))
 ax.plot(avg_curve.index, avg_curve.values, marker="o", color="#2b6cb0")
 for x, yv in zip(avg_curve.index, avg_curve.values):
     if x in (0,1,3,6,12): ax.annotate(f"{yv:.0f}%", (x, yv), textcoords="offset points", xytext=(0,8), fontsize=8)
-ax.set_title("Average Retention Curve (all cohorts)")
+# The tail of this curve rests on fewer and fewer cohorts: a cohort that signed up
+# in month 15 can only ever be observed for 3 months. Month 12 is the average of
+# the 6 oldest cohorts, not of all 18. The mean already excludes unobserved cells,
+# but the reader cannot see the sample thinning unless it is drawn.
+curve_n = retention.notna().sum(axis=0)
+axn = ax.twinx()
+axn.bar(curve_n.index, curve_n.values, color="#cbd5e0", alpha=0.45, zorder=0)
+axn.set_ylabel("Cohorts behind each point", color="#718096")
+axn.grid(False)
+ax.set_zorder(axn.get_zorder() + 1); ax.patch.set_visible(False)
+ax.set_title("Average Retention Curve (bars show cohorts observed)")
 ax.set_xlabel("Months since signup"); ax.set_ylabel("Retention %")
 fig.tight_layout(); fig.savefig("charts/02_retention_curve.png"); plt.close()
 
@@ -85,18 +95,36 @@ m1 = avg_curve.get(1, np.nan)
 m3 = avg_curve.get(3, np.nan)
 m6 = avg_curve.get(6, np.nan)
 m12 = avg_curve.get(12, np.nan)
-avg_lifetime_months = log.groupby("customer_id").month_since_signup.max().add(1).mean()
-ltv = arpu * avg_lifetime_months
+# Average observed lifetime is censored: anyone still subscribed when the window
+# closes has their life cut short by the data, not by churning. 38.7% of customers
+# here are in that position, which drags the mean down and understates LTV.
+# Instead, read expected lifetime off the survival curve (the area under it), then
+# extrapolate the tail using the long-run monthly retention rate.
+naive_lifetime = log.groupby("customer_id").month_since_signup.max().add(1).mean()
+
+surv = avg_curve / 100.0                      # S(m), proportion still active
+observed_area = surv.sum()                    # expected months inside the window
+tail_ratios = (surv.shift(-1) / surv).dropna().tail(6)
+r_longrun = float(tail_ratios.mean())         # steady-state monthly retention
+tail_area = surv.iloc[-1] * r_longrun / (1 - r_longrun) if r_longrun < 1 else np.nan
+expected_lifetime = observed_area + tail_area
+
+GROSS_MARGIN = 0.80                           # assumption: stated, not hidden
+ltv = arpu * GROSS_MARGIN * expected_lifetime
 
 with open("charts/findings.txt", "w") as f:
     f.write(f"Total customers: {log.customer_id.nunique():,}\n")
     f.write(f"ARPU (avg revenue/user/active month): ${arpu:.2f}\n")
-    f.write(f"Average customer lifetime: {avg_lifetime_months:.1f} months\n")
-    f.write(f"Estimated average LTV: ${ltv:.0f}\n\n")
+    f.write(f"Naive observed lifetime (censored): {naive_lifetime:.1f} months\n")
+    f.write(f"Expected lifetime from survival curve: {expected_lifetime:.1f} months\n")
+    f.write(f"  within the 18-month window: {observed_area:.1f} | extrapolated tail: {tail_area:.1f}\n")
+    f.write(f"  long-run monthly retention used for the tail: {r_longrun*100:.1f}%\n")
+    f.write(f"Estimated LTV (ARPU x {GROSS_MARGIN:.0%} margin x lifetime): ${ltv:.0f}\n\n")
     f.write("Average retention curve (%):\n")
     for x, yv in avg_curve.items():
         f.write(f"  Month {int(x):2d}: {yv:.1f}%\n")
 
-print(f"ARPU ${arpu:.2f} | Avg lifetime {avg_lifetime_months:.1f} mo | LTV ${ltv:.0f}")
+print(f"ARPU ${arpu:.2f} | naive lifetime {naive_lifetime:.1f} mo (censored) "
+      f"| expected lifetime {expected_lifetime:.1f} mo | LTV ${ltv:.0f}")
 print(f"Retention M1 {m1:.1f}% | M3 {m3:.1f}% | M6 {m6:.1f}% | M12 {m12:.1f}%")
 print("Done. Charts + findings in charts/")

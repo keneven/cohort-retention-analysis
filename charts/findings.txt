@@ -1,7 +1,10 @@
 Total customers: 9,245
 ARPU (avg revenue/user/active month): $27.42
-Average customer lifetime: 4.5 months
-Estimated average LTV: $123
+Naive observed lifetime (censored): 4.5 months
+Expected lifetime from survival curve: 10.3 months
+  within the 18-month window: 6.7 | extrapolated tail: 3.5
+  long-run monthly retention used for the tail: 95.2%
+Estimated LTV (ARPU x 80% margin x lifetime): $225
 
 Average retention curve (%):
   Month  0: 100.0%
